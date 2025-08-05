@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Parcel Viewer with Queue</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script src="https://api.mapbox.com/mapbox-gl-js/v3.3.0/mapbox-gl.js"></script>
+  <link href="https://api.mapbox.com/mapbox-gl-js/v3.3.0/mapbox-gl.css" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@600&display=swap" rel="stylesheet" />
+  <style>
+    body, html {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      font-family: 'Poppins', sans-serif;
+      background: #111;
+      color: #fff;
+    }
+
+    #map { position: absolute; top: 80px; bottom: 0; width: 100%; }
+
+    #queue-bar {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      background: #1A1B25;
+      padding: 12px 20px;
+      z-index: 10;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.4);
+      font-size: 0.9rem;
+    }
+
+    #queue-bar strong {
+      font-size: 1rem;
+      margin-right: 10px;
+    }
+
+    #parcel-queue {
+      display: inline-flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .parcel-tag {
+      background: #009260;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 0.8rem;
+      white-space: nowrap;
+    }
+
+    #controls {
+      position: absolute;
+      z-index: 10;
+      top: 90px;
+      left: 10px;
+      background: rgba(18, 19, 27, 0.95);
+      padding: 12px;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      box-shadow: 0 0 10px rgba(0,0,0,0.5);
+    }
+
+    #exportBtn {
+      background: #197CE2;
+      border: none;
+      color: white;
+      padding: 10px 14px;
+      border-radius: 6px;
+      font-weight: bold;
+      cursor: pointer;
+      margin-top: 0.5rem;
+    }
+
+    select {
+      margin-top: 0.5rem;
+      padding: 6px;
+      border-radius: 4px;
+    }
+
+    .mapboxgl-popup-content {
+      font-family: 'Poppins', sans-serif;
+      font-size: 0.9rem;
+      background: #1E1F2C;
+      color: #fff;
+      border-radius: 8px;
+      border: 1px solid #333;
+      max-height: 300px;
+      overflow-y: auto;
+    }
+
+    .mapboxgl-popup-content button {
+      background: #FEB000;
+      color: #000;
+      padding: 6px 10px;
+      margin-top: 10px;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+  <div id="queue-bar">
+    <strong>Queued Parcels:</strong>
+    <div id="parcel-queue">(none)</div>
+  </div>
+
+  <div id="controls">
+    <label for="exportType">Export as:</label>
+    <select id="exportType">
+      <option value="geojson">GeoJSON</option>
+      <option value="csv">CSV</option>
+    </select>
+    <button id="exportBtn">Export Selected</button>
+  </div>
+
+  <div id="map"></div>
+
+  <script>
+    mapboxgl.accessToken = 'YOUR_MAPBOX_ACCESS_TOKEN';
+
+    const map = new mapboxgl.Map({
+      container: 'map',
+      style: 'mapbox://styles/bymarkallan/cmd5li67d00br01s88rpmf4lv',
+      center: [-94.04, 33.43],
+      zoom: 11
+    });
+
+    const TILESET_SOURCE_LAYER = 'stratmap24-landparcels_48037_lp'; // Confirm in Mapbox Studio
+    const queue = new Map();
+    let selectedFeatures = [];
+
+    map.on('load', () => {
+      map.addSource('parcels', {
+        type: 'vector',
+        url: 'mapbox://bymarkallan.1ghta18f'
+      });
+
+      map.addLayer({
+        id: 'parcel-fill',
+        type: 'fill',
+        source: 'parcels',
+        'source-layer': TILESET_SOURCE_LAYER,
+        paint: {
+          'fill-color': '#7DC9D9',
+          'fill-opacity': 0.2
+        }
+      });
+
+      map.addLayer({
+        id: 'parcel-outline',
+        type: 'line',
+        source: 'parcels',
+        'source-layer': TILESET_SOURCE_LAYER,
+        paint: {
+          'line-color': '#009260',
+          'line-width': 1
+        }
+      });
+
+      // Highlight selected parcels
+      map.addSource('selected', {
+        type: 'geojson',
+        data: {
+          type: 'FeatureCollection',
+          features: []
+        }
+      });
+
+      map.addLayer({
+        id: 'selected-fill',
+        type: 'fill',
+        source: 'selected',
+        paint: {
+          'fill-color': '#FEB000',
+          'fill-opacity': 0.6
+        }
+      });
+
+      map.addLayer({
+        id: 'selected-outline',
+        type: 'line',
+        source: 'selected',
+        paint: {
+          'line-color': '#fff',
+          'line-width': 1
+        }
+      });
+
+      // Click to show popup
+      map.on('click', 'parcel-fill', (e) => {
+        if (!e.features.length) return;
+        const feature = e.features[0];
+        const props = feature.properties;
+
+        const fields = [
+          "COUNTY", "DATE_ACQ", "FIPS", "GEO_ID", "GIS_AREA", "GIS_AREA_U",
+          "IMP_VALUE", "LAND_VALUE", "LEGAL_AREA", "LEGAL_DESC", "LGL_AREA_U",
+          "LOC_LAND_U", "MAIL_ADDR", "MAIL_CITY", "MAIL_LINE1", "MAIL_LINE2",
+          "MAIL_STAT", "MAIL_ZIP", "MKT_VALUE", "NAME_CARE", "OBJECTID",
+          "OWNER_NAME", "Prop_ID", "SITUS_ADDR", "SITUS_CITY", "SITUS_NUM",
+          "SITUS_STAT", "SITUS_STRE", "SITUS_ST_1", "SITUS_ST_2", "SITUS_ZIP",
+          "SOURCE", "STAT_LAND_", "TAX_YEAR", "YEAR_BUILT"
+        ];
+
+        let popupHTML = `<div>`;
+        fields.forEach(field => {
+          const val = props[field] || props[field.toLowerCase()] || '';
+          if (val) {
+            popupHTML += `<strong>${field}:</strong> ${val}<br/>`;
+          }
+        });
+
+        popupHTML += `<br/><button onclick="addToQueue(${feature.id}, '${props.Prop_ID || props.prop_id || feature.id}')">Add to Queue</button></div>`;
+
+        new mapboxgl.Popup()
+          .setLngLat(e.lngLat)
+          .setHTML(popupHTML)
+          .addTo(map);
+      });
+
+      // Shift + Drag
+      map.boxZoom.enable();
+      map.dragPan.disable();
+
+      map.on('boxzoomend', (e) => {
+        const features = map.queryRenderedFeatures([
+          [e.boxZoomBounds.getSouthWest().lng, e.boxZoomBounds.getSouthWest().lat],
+          [e.boxZoomBounds.getNorthEast().lng, e.boxZoomBounds.getNorthEast().lat]
+        ], { layers: ['parcel-fill'] });
+
+        for (let f of features) {
+          if (!selectedFeatures.find(sel => sel.id === f.id)) {
+            selectedFeatures.push(f);
+          }
+        }
+        updateSelected();
+      });
+
+      // Export
+      document.getElementById('exportBtn').addEventListener('click', () => {
+        if (!selectedFeatures.length) {
+          alert('No parcels selected.');
+          return;
+        }
+
+        const type = document.getElementById('exportType').value;
+
+        if (type === 'geojson') {
+          const dataStr = JSON.stringify({
+            type: 'FeatureCollection',
+            features: selectedFeatures
+          }, null, 2);
+          downloadFile(dataStr, 'selected_parcels.geojson', 'application/json');
+        } else if (type === 'csv') {
+          const csv = geojsonToCSV(selectedFeatures);
+          downloadFile(csv, 'selected_parcels.csv', 'text/csv');
+        }
+      });
+
+      function updateSelected() {
+        const fc = {
+          type: 'FeatureCollection',
+          features: selectedFeatures.map(f => ({
+            type: 'Feature',
+            geometry: f.geometry,
+            properties: f.properties,
+            id: f.id
+          }))
+        };
+        map.getSource('selected').setData(fc);
+      }
+
+      function downloadFile(content, filename, type) {
+        const blob = new Blob([content], { type });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(url);
+      }
+
+      function geojsonToCSV(features) {
+        if (!features.length) return '';
+        const headers = Object.keys(features[0].properties);
+        const rows = features.map(f =>
+          headers.map(h =>
+            `"${(f.properties[h] || '').toString().replace(/"/g, '""')}"`
+          ).join(',')
+        );
+        return [headers.join(','), ...rows].join('\n');
+      }
+    });
+
+    // Add to queue and highlight
+    window.addToQueue = function (id, label) {
+      if (!queue.has(id)) {
+        queue.set(id, label);
+        updateQueueDisplay();
+
+        const fromMap = selectedFeatures.find(f => f.id === id);
+        if (!fromMap) {
+          const features = map.querySourceFeatures('parcels', {
+            sourceLayer: TILESET_SOURCE_LAYER,
+            filter: ['==', 'Prop_ID', label]
+          });
+
+          if (features.length) {
+            selectedFeatures.push(features[0]);
+            updateSelected();
+          }
+        }
+      }
+    };
+
+    function updateQueueDisplay() {
+      const container = document.getElementById('parcel-queue');
+      container.innerHTML = '';
+      if (queue.size === 0) {
+        container.innerHTML = '(none)';
+        return;
+      }
+      for (const [id, label] of queue.entries()) {
+        const tag = document.createElement('div');
+        tag.className = 'parcel-tag';
+        tag.innerText = `Parcel ${label}`;
+        container.appendChild(tag);
+      }
+    }
+  </script>
+</body>
+</html>
