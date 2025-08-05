@@ -98,7 +98,7 @@ This project is open-source and available under the MIT License.
 
 Contact
 
-For feedback, questions, or support, please contact [yourname] at [your.email@example.com].
+For feedback, questions, or support, please contact me at markahinton96@gmail.com.
 
 ---
 
